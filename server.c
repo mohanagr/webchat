@@ -11,12 +11,65 @@
 
 #define BACKLOG 0 //queue of pending requests
 #define STDIN 0
+
+void *get_in_addr(struct sockaddr_storage *obj)
+{
+	if (obj->ss_family == AF_INET) 
+	{
+		return &(((struct sockaddr_in*)obj)->sin_addr);
+	}
+	return &(((struct sockaddr_in6*)obj)->sin6_addr);
+}
+
+void multiplexer(int fd, char nick[])
+{
+	fd_set readfds, masterfd;
+	int fdmax = fd;
+	FD_ZERO(&readfds);
+	char outmsg[1024], inmsg[1024];
+	while(1)
+	{
+		FD_SET(fd, &readfds);
+		FD_SET(STDIN, &readfds);
+		int inbytes;
+
+		if (select(fdmax+1, &readfds, NULL, NULL, NULL) == -1) 
+		{
+ 			perror("select");
+ 			exit(4);
+ 		}
+		if(FD_ISSET(fd, &readfds))
+		{
+			if((inbytes = recv(fd, inmsg, 1023, 0)) == -1)
+				perror("server: read error");
+			if(inbytes==0)
+			{
+				close(fd);
+				printf("%s left\n", nick);
+				exit(0);
+			}
+			inmsg[inbytes] = 0; //null terminate
+			printf("%s >> %s", nick, inmsg);
+		}
+		/* Add check to see if whole message has been sent in case len > 1K */
+		else if(FD_ISSET(fileno(stdin), &readfds))
+	    {
+			if(fgets(outmsg, 1023, stdin)==NULL) //flushes buffer after firing unlike fscanf()
+				return ; 
+			else
+			{
+				if (send(fd, outmsg, strlen(outmsg), 0) == -1)
+					perror("server: send error");
+
+			}
+		}
+				
+	}
+}
 int main(int argc, char const *argv[])
 {
 	int sockfd, new_fd;
-	fd_set readfds, masterfd;
-	int fdmax;
-	FD_ZERO(&readfds);
+
 	char incoming_IP[INET6_ADDRSTRLEN];
 	struct addrinfo hints, *servinfo, *var;
 	struct sockaddr_storage their_addr; // since we do not know whether incoming conn. is INET or INET6 (Alternatively use sockaddr_in / sockaddr_in6)
@@ -68,7 +121,6 @@ int main(int argc, char const *argv[])
 		exit(1);
 	}
 
-	//add a while loop if BACKLOG > 0
 
 	printf("Listening for incoming connections..\n");
 
@@ -80,7 +132,7 @@ int main(int argc, char const *argv[])
 		exit(1);
 	}
 	
-	if(their_addr.ss_family == AF_INET) 
+	/*if(their_addr.ss_family == AF_INET) 
 	{
 		struct sockaddr_in *s = (struct sockaddr_in * )&their_addr;
 		inet_ntop(their_addr.ss_family, &(s->sin_addr), incoming_IP, INET_ADDRSTRLEN);
@@ -89,7 +141,10 @@ int main(int argc, char const *argv[])
 	{
 		struct sockaddr_in6 *s = (struct sockaddr_in6 *)&their_addr;
 		inet_ntop(their_addr.ss_family, &(s->sin6_addr), incoming_IP, INET6_ADDRSTRLEN);
-	}
+	}*/
+
+	inet_ntop(their_addr.ss_family, get_in_addr(&their_addr), incoming_IP, INET6_ADDRSTRLEN);
+	
 	printf("Server received a connection from %s\n",incoming_IP);
 
 	//ask a nick
@@ -115,48 +170,8 @@ int main(int argc, char const *argv[])
 	}
 	clientNick[strlen(clientNick)-1] = '\0'; //last characters is newline which is always sent
 
-	char outmsg[1024], inmsg[1024];
-
 	//Multiplexing
-	while(1)
-	{
-		FD_SET(new_fd, &readfds);
-		FD_SET(STDIN, &readfds);
-		fdmax = new_fd;
-
-		if (select(fdmax+1, &readfds, NULL, NULL, NULL) == -1) 
-		{
- 			perror("select");
- 			exit(4);
- 		}
-		if(FD_ISSET(new_fd, &readfds))
-		{
-			if((inbytes = recv(new_fd, inmsg, 1023, 0)) == -1)
-				perror("server: read error");
-			if(inbytes==0)
-			{
-				close(new_fd);
-				printf("%s left\n", clientNick);
-				exit(0);
-			}
-			inmsg[inbytes] = 0; //null terminate
-			printf("%s >> %s", clientNick, inmsg);
-		}
-		/* Add check to see if whole message has been sent in case len > 1K */
-		else if(FD_ISSET(fileno(stdin), &readfds))
-	    {
-			if(fgets(outmsg, 1023, stdin)==NULL) //flushes buffer after firing unlike fscanf()
-				return 2; 
-			else
-			{
-				if (send(new_fd, outmsg, strlen(outmsg), 0) == -1)
-					perror("server: send error");
-
-			}
-		}
-				
-	}
-	
+	multiplexer(new_fd, clientNick);
 	close(sockfd);
  	return 0; 	
 }
