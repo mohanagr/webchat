@@ -16,6 +16,7 @@ struct client
 {
 	char name[1024];
 };
+struct client  peer[100]; // ( If only I had std::maps or pair!)
 int readmsg(int fd, int BytesToRead, char *InBuff)
 {
 	int inbytes;
@@ -27,7 +28,7 @@ int readmsg(int fd, int BytesToRead, char *InBuff)
 	if(inbytes==0)
 	{
 		close(fd);
-		printf("Client left\n");
+		printf("%s left\n", peer[fd].name);
 	}
 	InBuff[inbytes] = 0;
 	return inbytes;
@@ -75,7 +76,7 @@ void multiplexer(int listener)
 	char outmsg[1024], inmsg[1024];
 	char incoming_IP[INET6_ADDRSTRLEN]; //Extra size doesn't hurt
 	fdmax = listener;
-	//struct client peer[10]; // ( If only I had std::maps or pair!)
+	
 	while(1)
 	{
 		readfds = masterfd;
@@ -97,16 +98,17 @@ void multiplexer(int listener)
 					}
 					else
 					{
-						//client_no++;
-						//(peer+client_no)->number = new_fd;
 						FD_SET(new_fd, &masterfd); // add to master set
 						if (new_fd > fdmax) 
 							fdmax = new_fd;
 						inet_ntop(their_addr.ss_family, get_in_addr(&their_addr), incoming_IP, INET6_ADDRSTRLEN);
 						printf("Server received a connection from %s on socket %d\n",incoming_IP, new_fd);
-						//getnick(new_fd, peer[new_fd].name);
-						char z[] = "Welcome\n";
-						send_msg(new_fd, z);
+						getnick(new_fd, peer[new_fd].name);
+						char b[] = "Welcome ";
+						char *c =  peer[new_fd].name;
+						char * dest;
+						dest = strcat(b, strcat(c, "\n"));
+						send_msg(new_fd, b);
 						
 					}
 				}
@@ -133,8 +135,8 @@ void multiplexer(int listener)
 				{
 					if(readmsg(i, 1023, inmsg))
 					{
-						printf("%s\n",inmsg); //display on server
-						//sprintf(outmsg, "%s",inmsg);
+						printf("%s -> %s", peer[new_fd].name, inmsg); //display on server
+						sprintf(outmsg, "%s -> %s",peer[new_fd].name, inmsg);
 						for(int j = 0; j <= fdmax; j++) 
 						{
 							// send to everyone!
@@ -143,7 +145,7 @@ void multiplexer(int listener)
 								// except the listener and the guy who sent it
 								if (j != listener && j != i && j!=0) 
 								{
-									send_msg(j, inmsg);
+									send_msg(j, outmsg);
 								}
 							}
 						}
