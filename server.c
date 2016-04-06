@@ -12,6 +12,44 @@
 #define BACKLOG 0 //queue of pending requests
 #define STDIN 0
 
+void readmsg(int fd, int BytesToRead, char *InBuff)
+{
+	int inbytes;
+	if((inbytes = recv(fd, InBuff, BytesToRead, 0)) == -1)
+	{
+		perror("server: read error -- nick"); 
+		exit(1);
+	}
+	if(inbytes==0)
+	{
+		close(fd);
+		printf("Client left\n");
+		exit(0);
+	}
+	InBuff[inbytes] = 0;
+	return;
+}
+
+void send_msg(int fd, char *OutBuff)  //sendmsg is already a function in socket.h
+{
+	OutBuff[strlen(OutBuff)] = '\0'; //safety is good
+	if (send(fd, OutBuff, strlen(OutBuff), 0) == -1)
+	{
+		perror("server: send error"); 
+		exit(1);
+	}
+}
+
+void getnick(int fd, char *clientNick)
+{
+	char enterNick[] = "Enter a nick (Max 1023 characters) : ";
+	int inbytes;
+	send_msg(fd, enterNick);
+	readmsg(fd, 1023, clientNick);
+	clientNick[strlen(clientNick)-1] = '\0'; //last character is newline which is always sent
+	return;
+}
+
 void *get_in_addr(struct sockaddr_storage *obj)
 {
 	if (obj->ss_family == AF_INET) 
@@ -40,15 +78,7 @@ void multiplexer(int fd, char nick[])
  		}
 		if(FD_ISSET(fd, &readfds))
 		{
-			if((inbytes = recv(fd, inmsg, 1023, 0)) == -1)
-				perror("server: read error");
-			if(inbytes==0)
-			{
-				close(fd);
-				printf("%s left\n", nick);
-				exit(0);
-			}
-			inmsg[inbytes] = 0; //null terminate
+			readmsg(fd, 1023, inmsg);
 			printf("%s >> %s", nick, inmsg);
 		}
 		/* Add check to see if whole message has been sent in case len > 1K */
@@ -58,9 +88,7 @@ void multiplexer(int fd, char nick[])
 				return ; 
 			else
 			{
-				if (send(fd, outmsg, strlen(outmsg), 0) == -1)
-					perror("server: send error");
-
+				send_msg(fd, outmsg);
 			}
 		}
 				
@@ -82,7 +110,7 @@ int main(int argc, char const *argv[])
 	int err;
 	if(argc != 2)
 	{
-		fprintf(stderr, "Usage: Port\n");
+		fprintf(stderr, "Usage: ./server.out [Port]\n");
 	}
 	if ((err = getaddrinfo(NULL, argv[1], &hints, &servinfo)) != 0) //servinfo is a linked-list of info. about IPs of the host (us)
 	{
@@ -148,30 +176,11 @@ int main(int argc, char const *argv[])
 	printf("Server received a connection from %s\n",incoming_IP);
 
 	//ask a nick
-	char enterNick[] = "Enter a nick (Max 1023 characters) :";
-	char clientNick[1023];
-	int inbytes, i;
-	enterNick[strlen(enterNick)] = '\0';
-	if (send(new_fd, enterNick, strlen(enterNick), 0) == -1)
-	{
-		perror("server: send error"); 
-		exit(5);
-	}
-	if((inbytes = recv(new_fd, clientNick, 1023, 0)) == -1)
-	{
-		perror("server: read error -- nick"); 
-		exit(3);
-	}
-	if(inbytes==0)
-	{
-		close(new_fd);
-		printf("Client left\n");
-		exit(0);
-	}
-	clientNick[strlen(clientNick)-1] = '\0'; //last characters is newline which is always sent
+	char client_nick[1024];
+	getnick(new_fd, client_nick);
 
 	//Multiplexing
-	multiplexer(new_fd, clientNick);
+	multiplexer(new_fd, client_nick);
 	close(sockfd);
  	return 0; 	
 }
