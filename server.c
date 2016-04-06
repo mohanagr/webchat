@@ -9,25 +9,28 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#define BACKLOG 0 //queue of pending requests
+#define BACKLOG 10 //queue of max pending requests
 #define STDIN 0
 
-void readmsg(int fd, int BytesToRead, char *InBuff)
+struct client
+{
+	char name[1024];
+};
+int readmsg(int fd, int BytesToRead, char *InBuff)
 {
 	int inbytes;
 	if((inbytes = recv(fd, InBuff, BytesToRead, 0)) == -1)
 	{
 		perror("server: read error -- nick"); 
-		exit(1);
+		close(fd);
 	}
 	if(inbytes==0)
 	{
 		close(fd);
 		printf("Client left\n");
-		exit(0);
 	}
 	InBuff[inbytes] = 0;
-	return;
+	return inbytes;
 }
 
 void send_msg(int fd, char *OutBuff)  //sendmsg is already a function in socket.h
@@ -36,7 +39,6 @@ void send_msg(int fd, char *OutBuff)  //sendmsg is already a function in socket.
 	if (send(fd, OutBuff, strlen(OutBuff), 0) == -1)
 	{
 		perror("server: send error"); 
-		exit(1);
 	}
 }
 
@@ -59,49 +61,104 @@ void *get_in_addr(struct sockaddr_storage *obj)
 	return &(((struct sockaddr_in6*)obj)->sin6_addr);
 }
 
-void multiplexer(int fd, char nick[])
+void multiplexer(int listener)
 {
+	socklen_t addrsize;
+	struct sockaddr_storage their_addr;
 	fd_set readfds, masterfd;
-	int fdmax = fd;
 	FD_ZERO(&readfds);
+	FD_ZERO(&masterfd);
+	FD_SET(listener, &masterfd);
+	FD_SET(STDIN, &masterfd);
+	int fdmax;
+	int inbytes, client_no = -1, new_fd;
 	char outmsg[1024], inmsg[1024];
+	char incoming_IP[INET6_ADDRSTRLEN]; //Extra size doesn't hurt
+	fdmax = listener;
+	//struct client peer[10]; // ( If only I had std::maps or pair!)
 	while(1)
 	{
-		FD_SET(fd, &readfds);
-		FD_SET(STDIN, &readfds);
-		int inbytes;
-
+		readfds = masterfd;
 		if (select(fdmax+1, &readfds, NULL, NULL, NULL) == -1) 
 		{
  			perror("select");
  			exit(4);
  		}
-		if(FD_ISSET(fd, &readfds))
-		{
-			readmsg(fd, 1023, inmsg);
-			printf("%s >> %s", nick, inmsg);
-		}
-		/* Add check to see if whole message has been sent in case len > 1K */
-		else if(FD_ISSET(fileno(stdin), &readfds))
-	    {
-			if(fgets(outmsg, 1023, stdin)==NULL) //flushes buffer after firing unlike fscanf()
-				return ; 
-			else
+ 		for(int i=0; i<=fdmax; i++)
+		{	
+			if(FD_ISSET(i, &readfds))
 			{
-				send_msg(fd, outmsg);
+				if(i==listener)
+				{
+					addrsize = sizeof their_addr;
+					if((new_fd = accept(listener, (struct sockaddr *)&their_addr, &addrsize)) == -1) //accept  is a blocking function
+					{
+						perror("server: accept error");
+					}
+					else
+					{
+						//client_no++;
+						//(peer+client_no)->number = new_fd;
+						FD_SET(new_fd, &masterfd); // add to master set
+						if (new_fd > fdmax) 
+							fdmax = new_fd;
+						inet_ntop(their_addr.ss_family, get_in_addr(&their_addr), incoming_IP, INET6_ADDRSTRLEN);
+						printf("Server received a connection from %s on socket %d\n",incoming_IP, new_fd);
+						//getnick(new_fd, peer[new_fd].name);
+						char z[] = "Welcome\n";
+						send_msg(new_fd, z);
+						
+					}
+				}
+				else if(i == 0)
+			    {
+					if(fgets(outmsg, 1023, stdin)==NULL) //flushes buffer after firing unlike fscanf()
+						return ; 
+					else
+					{	for(int j = 0; j <= fdmax; j++) 
+						{
+							// send to everyone!
+							if (FD_ISSET(j, &masterfd)) 
+							{
+								// except the listener and ourselves (we typed it!)
+								if (j != listener && j != 0 && j!= fileno(stdout) && j!=i) 
+								{
+									send_msg(j, outmsg);
+								}
+							}
+						}
+					}
+				}
+				else //A client got some data
+				{
+					if(readmsg(i, 1023, inmsg))
+					{
+						printf("%s\n",inmsg); //display on server
+						//sprintf(outmsg, "%s",inmsg);
+						for(int j = 0; j <= fdmax; j++) 
+						{
+							// send to everyone!
+							if (FD_ISSET(j, &masterfd)) 
+							{
+								// except the listener and the guy who sent it
+								if (j != listener && j != i && j!=0) 
+								{
+									send_msg(j, inmsg);
+								}
+							}
+						}
+					}
+					else
+						FD_CLR(i, &masterfd);
+				}
 			}
-		}
-				
+		}		
 	}
 }
 int main(int argc, char const *argv[])
 {
-	int sockfd, new_fd;
-
-	char incoming_IP[INET6_ADDRSTRLEN];
+	int sockfd;
 	struct addrinfo hints, *servinfo, *var;
-	struct sockaddr_storage their_addr; // since we do not know whether incoming conn. is INET or INET6 (Alternatively use sockaddr_in / sockaddr_in6)
-	socklen_t sin_size;
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
@@ -148,39 +205,13 @@ int main(int argc, char const *argv[])
 		perror("server: listen error");
 		exit(1);
 	}
-
-
 	printf("Listening for incoming connections..\n");
 
-	// their_addr stores info about incoming conn.
-	sin_size = sizeof their_addr; 
-	if((new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size)) == -1) //accept  is a blocking function
-	{
-		perror("server: accept error");
-		exit(1);
-	}
 	
-	/*if(their_addr.ss_family == AF_INET) 
-	{
-		struct sockaddr_in *s = (struct sockaddr_in * )&their_addr;
-		inet_ntop(their_addr.ss_family, &(s->sin_addr), incoming_IP, INET_ADDRSTRLEN);
-	}
-	else																					//inet_ntop takes size of string as argument not size of address ( as in accept() )
-	{
-		struct sockaddr_in6 *s = (struct sockaddr_in6 *)&their_addr;
-		inet_ntop(their_addr.ss_family, &(s->sin6_addr), incoming_IP, INET6_ADDRSTRLEN);
-	}*/
 
-	inet_ntop(their_addr.ss_family, get_in_addr(&their_addr), incoming_IP, INET6_ADDRSTRLEN);
-	
-	printf("Server received a connection from %s\n",incoming_IP);
 
-	//ask a nick
-	char client_nick[1024];
-	getnick(new_fd, client_nick);
-
-	//Multiplexing
-	multiplexer(new_fd, client_nick);
+	// Multi-client I/O Multiplexing
+	multiplexer(sockfd);
 	close(sockfd);
  	return 0; 	
 }
