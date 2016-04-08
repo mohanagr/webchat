@@ -15,6 +15,10 @@
 
 static int uid = 0;
 
+/* Global variables utilized by most of the following functions, mostly 'cuz too lazy to write a struct */
+
+/* I miss C++ STL */
+
 typedef struct {	
 	int connfd;			/* Connection file descriptor */
 	int uid;			/* Client unique identifier */
@@ -32,11 +36,11 @@ void queue_add(client_t *cl){
 	}
 }
 
-void queue_delete(int uid){
+void queue_delete(int id){
 	int i;
 	for(i=0;i<MAX_CLIENTS;i++){
 		if(clients[i]){
-			if(clients[i]->uid == uid){
+			if(clients[i]->connfd == id){
 				clients[i] = NULL;
 				return;
 			}
@@ -64,17 +68,11 @@ int readmsg(int fd, int BytesToRead, char *InBuff)
 		perror("server: read error -- nick"); 
 		close(fd);
 	}
-	if(inbytes==0)
-	{
-		close(fd);
-		index  = get_index(fd);
-		printf("%s left\n", clients[index]->name);
-	}
 	InBuff[inbytes] = 0;
 	return inbytes;
 }
 
-void send_msg(int fd, char *OutBuff)  
+void send_private(int fd, char *OutBuff)  
 {
 	OutBuff[strlen(OutBuff)] = '\0'; //safety is good
 	if (send(fd, OutBuff, strlen(OutBuff), 0) == -1)
@@ -83,12 +81,33 @@ void send_msg(int fd, char *OutBuff)
 	}
 }
 
+void broadcast_msg(int fd, char *OutBuff, fd_set *fdset, int fdmax, int listener)
+{
+	OutBuff[strlen(OutBuff)] = '\0';
+	for(int j = 0; j <= fdmax; j++) 
+	{
+		// send to everyone!
+		if (FD_ISSET(j, fdset)) 
+		{
+			// except the listener and the guy who sent it
+			if (j != listener && j != fd && j!=0) 
+			{
+				if (send(j, OutBuff, strlen(OutBuff), 0) == -1)
+				{
+					perror("server: send error"); 
+				}
+			}
+		}
+	}
+}
+
+
 void getnick(int fd, char* nm) 
 {
 	char enterNick[] = "Enter a nick (Max 1023 characters) : ";
 	int inbytes, len;
 	char clnick[1024];
-	send_msg(fd, enterNick);
+	send_private(fd, enterNick);
 	if((inbytes = recv(fd, clnick, 1023, 0)) == -1)
 	{
 		perror("server: read error -- nick"); 
@@ -117,15 +136,16 @@ void *get_in_addr(struct sockaddr_storage *obj)
 
 void multiplexer(int listener)
 {
-	socklen_t addrsize;
-	struct sockaddr_storage their_addr;
 	fd_set readfds, masterfd;
 	FD_ZERO(&readfds);
 	FD_ZERO(&masterfd);
 	FD_SET(listener, &masterfd);
 	FD_SET(STDIN, &masterfd);
 	int fdmax;
-	int inbytes, client_no = -1, new_fd;
+
+	socklen_t addrsize;
+	struct sockaddr_storage their_addr;
+	int inbytes,  new_fd, var;
 	char outmsg[1024], inmsg[1024];
 	char incoming_IP[INET6_ADDRSTRLEN]; //Extra size doesn't hurt
 	fdmax = listener;
@@ -164,7 +184,12 @@ void multiplexer(int listener)
 						sprintf(cli->name, "%s", c);
 						/* Add client to the queue */
 						queue_add(cli);
-						
+						var = get_index(new_fd);
+						sprintf(outmsg, "%s %s %s", "||| WELCOME",clients[var]->name, "|||\n");
+						send_private(new_fd, outmsg);
+						sprintf(outmsg, "%s joined the room\n",clients[var]->name);
+						printf("%s", outmsg); //display on server
+						broadcast_msg(new_fd, outmsg, &masterfd, fdmax, listener);
 					}
 				}
 				else if(i == 0)
@@ -172,44 +197,28 @@ void multiplexer(int listener)
 					if(fgets(outmsg, 1023, stdin)==NULL) //flushes buffer after firing unlike fscanf()
 						return ; 
 					else
-					{	for(int j = 0; j <= fdmax; j++) 
-						{
-							// send to everyone!
-							if (FD_ISSET(j, &masterfd)) 
-							{
-								// except the listener and ourselves (we typed it!)
-								if (j != listener && j != 0 && j!= fileno(stdout) && j!=i) 
-								{
-									send_msg(j, outmsg);
-								}
-							}
-						}
+					{	
+						char out[1024];
+						sprintf(out, "%s %s","[Server] : ", outmsg);
+						broadcast_msg(i, out, &masterfd, fdmax, listener);
 					}
 				}
 				else //A client got some data
 				{
+					var = get_index(i);
 					if(readmsg(i, 1023, inmsg))
 					{
-						int var;
-						var = get_index(i);
-						printf("%s -> %s", clients[var]->name, inmsg); //display on server
-						sprintf(outmsg, "%s -> %s",clients[var]->name, inmsg);
-						for(int j = 0; j <= fdmax; j++) 
-						{
-							// send to everyone!
-							if (FD_ISSET(j, &masterfd)) 
-							{
-								// except the listener and the guy who sent it
-								if (j != listener && j != i && j!=0) 
-								{
-									send_msg(j, outmsg);
-								}
-							}
-						}
+						printf("[%s] : %s", clients[var]->name, inmsg); //display on server
+						sprintf(outmsg, "[%s] : %s",clients[var]->name, inmsg);
+						broadcast_msg(i, outmsg, &masterfd, fdmax, listener);
 					}
 					else
 					{
+						printf("%s left the room\n", clients[var]->name); //display on server
+						sprintf(outmsg, "%s %s",clients[var]->name, "left the room\n");
+						broadcast_msg(i, outmsg, &masterfd, fdmax, listener);
 						FD_CLR(i, &masterfd);
+						close(i);
 						queue_delete(i);
 					}
 				}
