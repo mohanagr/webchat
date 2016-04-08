@@ -11,11 +11,9 @@
 
 #define BACKLOG 10 //queue of max pending requests
 #define STDIN 0
-#define MAX_CLIENTS 10
+#define MAX_CLIENTS 10 
 
 static int uid = 0;
-
-/* Global variables utilized by most of the following functions, mostly 'cuz too lazy to write a struct */
 
 /* I miss C++ STL */
 
@@ -26,21 +24,28 @@ typedef struct {
 } client_t;
 client_t *clients[MAX_CLIENTS] = {NULL};
 
-void queue_add(client_t *cl){
+void queue_add(client_t *cl)
+{
 	int i;
-	for(i=0;i<MAX_CLIENTS;i++){
-		if(!clients[i]){
+	for(i=0;i<MAX_CLIENTS;i++)
+	{
+		if(!clients[i])
+		{
 			clients[i] = cl;
 			return;
 		}
 	}
 }
 
-void queue_delete(int id){
+void queue_delete(int id)
+{
 	int i;
-	for(i=0;i<MAX_CLIENTS;i++){
-		if(clients[i]){
-			if(clients[i]->connfd == id){
+	for(i=0;i<MAX_CLIENTS;i++)
+	{
+		if(clients[i])
+		{
+			if(clients[i]->connfd == id)
+			{
 				clients[i] = NULL;
 				return;
 			}
@@ -51,9 +56,12 @@ void queue_delete(int id){
 int get_index(int fd)
 {
 	int i;
-	for(i=0;i<MAX_CLIENTS;i++){
-		if(clients[i]){
-			if(clients[i]->connfd == fd){
+	for(i=0;i<MAX_CLIENTS;i++)
+	{
+		if(clients[i])
+		{
+			if(clients[i]->connfd == fd)
+			{
 				return i ;
 			}
 		}
@@ -194,7 +202,7 @@ void multiplexer(int listener)
 				}
 				else if(i == 0)
 			    {
-					if(fgets(outmsg, 1023, stdin)==NULL) //flushes buffer after firing unlike fscanf()
+					if(fgets(outmsg, 1023, stdin)==NULL) 
 						return ; 
 					else
 					{	
@@ -203,7 +211,7 @@ void multiplexer(int listener)
 						broadcast_msg(i, out, &masterfd, fdmax, listener);
 					}
 				}
-				else //A client got some data
+				else //Only case left is that a client got some data
 				{
 					var = get_index(i);
 					if(readmsg(i, 1023, inmsg))
@@ -240,9 +248,9 @@ int main(int argc, char const *argv[])
 	{
 		fprintf(stderr, "Usage: ./server.out [Port]\n");
 	}
-	if ((err = getaddrinfo(NULL, argv[1], &hints, &servinfo)) != 0) //servinfo is a linked-list of info. about IPs of the host (us)
+	if ((err = getaddrinfo(NULL, argv[1], &hints, &servinfo)) != 0) //servinfo is a linked-list of info. about IPs of the host
 	{
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err)); //use stderr to avoid mixing outputs.
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err)); 
 		return 1;
 	}
 	for(var = servinfo; var != NULL; var = var->ai_next) 
