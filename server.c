@@ -11,15 +11,54 @@
 
 #define BACKLOG 10 //queue of max pending requests
 #define STDIN 0
+#define MAX_CLIENTS 10
 
-struct client
+static int uid = 0;
+
+typedef struct {	
+	int connfd;			/* Connection file descriptor */
+	int uid;			/* Client unique identifier */
+	char name[32];			/* Client name */
+} client_t;
+client_t *clients[MAX_CLIENTS] = {NULL};
+
+void queue_add(client_t *cl){
+	int i;
+	for(i=0;i<MAX_CLIENTS;i++){
+		if(!clients[i]){
+			clients[i] = cl;
+			return;
+		}
+	}
+}
+
+void queue_delete(int uid){
+	int i;
+	for(i=0;i<MAX_CLIENTS;i++){
+		if(clients[i]){
+			if(clients[i]->uid == uid){
+				clients[i] = NULL;
+				return;
+			}
+		}
+	}
+}
+
+int get_index(int fd)
 {
-	char name[1024];
-};
-struct client  peer[100]; // ( If only I had std::maps or pair!)
+	int i;
+	for(i=0;i<MAX_CLIENTS;i++){
+		if(clients[i]){
+			if(clients[i]->connfd == fd){
+				return i ;
+			}
+		}
+	}
+}
+
 int readmsg(int fd, int BytesToRead, char *InBuff)
 {
-	int inbytes;
+	int inbytes, index;
 	if((inbytes = recv(fd, InBuff, BytesToRead, 0)) == -1)
 	{
 		perror("server: read error -- nick"); 
@@ -28,13 +67,14 @@ int readmsg(int fd, int BytesToRead, char *InBuff)
 	if(inbytes==0)
 	{
 		close(fd);
-		printf("%s left\n", peer[fd].name);
+		index  = get_index(fd);
+		printf("%s left\n", clients[index]->name);
 	}
 	InBuff[inbytes] = 0;
 	return inbytes;
 }
 
-void send_msg(int fd, char *OutBuff)  //sendmsg is already a function in socket.h
+void send_msg(int fd, char *OutBuff)  
 {
 	OutBuff[strlen(OutBuff)] = '\0'; //safety is good
 	if (send(fd, OutBuff, strlen(OutBuff), 0) == -1)
@@ -43,14 +83,27 @@ void send_msg(int fd, char *OutBuff)  //sendmsg is already a function in socket.
 	}
 }
 
-void getnick(int fd, char *clientNick)
+void getnick(int fd, char* nm) 
 {
 	char enterNick[] = "Enter a nick (Max 1023 characters) : ";
-	int inbytes;
+	int inbytes, len;
+	char clnick[1024];
 	send_msg(fd, enterNick);
-	readmsg(fd, 1023, clientNick);
-	clientNick[strlen(clientNick)-1] = '\0'; //last character is newline which is always sent
-	return;
+	if((inbytes = recv(fd, clnick, 1023, 0)) == -1)
+	{
+		perror("server: read error -- nick"); 
+		close(fd);
+	}
+	if(inbytes==0)
+	{
+		close(fd);
+		printf("Client on socket %d closed connection before entering nick\n", fd);
+	}
+	for(int i=0; i<inbytes-1; ++i)
+	{
+		*(nm+i) = clnick[i];
+	}
+	*(nm+inbytes-1) = '\0';
 }
 
 void *get_in_addr(struct sockaddr_storage *obj)
@@ -92,23 +145,25 @@ void multiplexer(int listener)
 				if(i==listener)
 				{
 					addrsize = sizeof their_addr;
-					if((new_fd = accept(listener, (struct sockaddr *)&their_addr, &addrsize)) == -1) //accept  is a blocking function
+					if((new_fd = accept(listener, (struct sockaddr *)&their_addr, &addrsize)) == -1) 
 					{
 						perror("server: accept error");
 					}
 					else
 					{
+						char c[1024];
 						FD_SET(new_fd, &masterfd); // add to master set
 						if (new_fd > fdmax) 
 							fdmax = new_fd;
 						inet_ntop(their_addr.ss_family, get_in_addr(&their_addr), incoming_IP, INET6_ADDRSTRLEN);
 						printf("Server received a connection from %s on socket %d\n",incoming_IP, new_fd);
-						getnick(new_fd, peer[new_fd].name);
-						char b[] = "Welcome ";
-						char *c =  peer[new_fd].name;
-						char * dest;
-						dest = strcat(b, strcat(c, "\n"));
-						send_msg(new_fd, b);
+						getnick(new_fd, c);
+						client_t *cli = (client_t *)malloc(sizeof(client_t));
+						cli->connfd = new_fd;
+						cli->uid = uid++;
+						sprintf(cli->name, "%s", c);
+						/* Add client to the queue */
+						queue_add(cli);
 						
 					}
 				}
@@ -135,8 +190,10 @@ void multiplexer(int listener)
 				{
 					if(readmsg(i, 1023, inmsg))
 					{
-						printf("%s -> %s", peer[new_fd].name, inmsg); //display on server
-						sprintf(outmsg, "%s -> %s",peer[new_fd].name, inmsg);
+						int var;
+						var = get_index(i);
+						printf("%s -> %s", clients[var]->name, inmsg); //display on server
+						sprintf(outmsg, "%s -> %s",clients[var]->name, inmsg);
 						for(int j = 0; j <= fdmax; j++) 
 						{
 							// send to everyone!
@@ -151,7 +208,10 @@ void multiplexer(int listener)
 						}
 					}
 					else
+					{
 						FD_CLR(i, &masterfd);
+						queue_delete(i);
+					}
 				}
 			}
 		}		
@@ -209,11 +269,9 @@ int main(int argc, char const *argv[])
 	}
 	printf("Listening for incoming connections..\n");
 
-	
-
-
 	// Multi-client I/O Multiplexing
 	multiplexer(sockfd);
+
 	close(sockfd);
  	return 0; 	
 }
